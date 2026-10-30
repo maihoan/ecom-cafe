@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+:root {
+  --brand: #7c3aed;
+}
+
+body {
+  @apply bg-stone-50 text-stone-900 antialiased;
+}

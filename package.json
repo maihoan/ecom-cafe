@@ -1,0 +1,22 @@
+{
+  "name": "ecom",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Ecommerce cafe tinh gon tren Cloudflare (Hono + D1/KV/R2 + Next.js)",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:api": "npm -w apps/api run dev",
+    "dev:web": "npm -w apps/web run dev",
+    "seed": "npm -w apps/api run seed",
+    "build": "npm -w apps/web run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261023.1": true
+  }
+}

@@ -1,0 +1,20 @@
+name = "ecom-api"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# === Local-only placeholder bindings ===
+# Replace with real IDs after `wrangler login` + creating remote resources.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ecom-db"
+database_id = "00000000-0000-0000-0000-000000000001"
+
+[[kv_namespaces]]
+binding = "CART"
+id = "00000000000000000000000000000000000000000001"
+
+[[r2_buckets]]
+binding = "IMAGES"
+bucket_name = "ecom-images"
