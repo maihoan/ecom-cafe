@@ -1,8 +1,13 @@
 # Hướng dẫn Triển khai lên Cloudflare — Ecommerce Cafe
 
 Tài liệu chi tiết hướng dẫn deploy toàn bộ dự án Ecommerce Cafe lên nền tảng
-**Cloudflare** (Workers + D1 + KV + R2). Viết dựa trên cấu trúc dự án hiện tại
+**Cloudflare** (Workers + D1 + KV). Viết dựa trên cấu trúc dự án hiện tại
 (monorepo `apps/api` + `apps/web`) và trạng thái chưa đăng nhập Cloudflare.
+
+> 💡 **Về hình ảnh món:** dự án hiện **tạm thời KHÔNG dùng R2** cho ảnh — back-end
+> sinh **SVG placeholder** (`/img/placeholder.svg`) thay thế. R2 vẫn được khai báo sẵn
+> trong [wrangler.toml](../apps/api/wrangler.toml) (comment) để bật lại khi cần upload
+> ảnh thật. Phần lớn tài liệu này không đụng tới R2.
 
 ---
 
@@ -11,7 +16,7 @@ Tài liệu chi tiết hướng dẫn deploy toàn bộ dự án Ecommerce Cafe 
 1. [Tổng quan quy trình](#1-tổng-quan-quy-trình)
 2. [Điều kiện tiên quyết](#2-điều-kiện-tiên-quyết)
 3. [Bước 1 — Đăng nhập Cloudflare](#3-bước-1--đăng-nhập-cloudflare)
-4. [Bước 2 — Tạo tài nguyên (D1 / KV / R2)](#4-bước-2--tạo-tài-nguyên-d1--kv--r2)
+4. [Bước 2 — Tạo tài nguyên (D1 / KV)](#4-bước-2--tạo-tài-nguyên-d1--kv)
 5. [Bước 3 — Cập nhật `wrangler.toml`](#5-bước-3--cập-nhật-wranglertoml)
 6. [Bước 4 — Deploy Backend (apps/api)](#6-bước-4--deploy-backend-appsapi)
 7. [Bước 5 — Nạp schema & seed lên D1 remote](#7-bước-5--nạp-schema--seed-lên-d1-remote)
@@ -36,8 +41,7 @@ Tài liệu chi tiết hướng dẫn deploy toàn bộ dự án Ecommerce Cafe 
   ┌────┴─────────────────────────────────────────────┐
   │ 1. wrangler d1 create ecom-db        → D1 (SQL)  │
   │ 2. wrangler kv namespace create CART → KV (giỏ)  │
-  │ 3. wrangler r2 bucket create ecom-images → R2    │
-  │ 4. sửa apps/api/wrangler.toml với id thật        │
+  │ 3. sửa apps/api/wrangler.toml với id thật        │
   └──────────────────────────────────────────────────┘
        │
   ┌────┴─────────────────────────────────────────────┐
@@ -51,7 +55,7 @@ Tài liệu chi tiết hướng dẫn deploy toàn bộ dự án Ecommerce Cafe 
 
 | Worker | URL mặc định | Vai trò |
 |---|---|---|
-| `ecom-api` | `https://ecom-api.<subdomain>.workers.dev` | Backend Hono (D1/KV/R2) |
+| `ecom-api` | `https://ecom-api.<subdomain>.workers.dev` | Backend Hono (D1/KV, ảnh = placeholder) |
 | `ecom-web` | `https://ecom-web.<subdomain>.workers.dev` | Frontend Next.js + Admin |
 
 ---
@@ -99,7 +103,7 @@ When logged in, your supported actions include:
 
 ---
 
-## 4. Bước 2 — Tạo tài nguyên (D1 / KV / R2)
+## 4. Bước 2 — Tạo tài nguyên (D1 / KV)
 
 Chạy từ thư mục `apps/api` (nơi có `wrangler.toml`):
 
@@ -142,17 +146,20 @@ binding = "CART"
 id = "<KV-ID>"
 ```
 
-### 4.3 Tạo R2 bucket
+### 4.3 Về ảnh món — không cần R2 (dùng placeholder)
 
-```bash
-npx wrangler r2 bucket create ecom-images
-```
+Dự án hiện **không tạo R2 bucket nào** khi deploy:
 
-Output:
+- Ảnh món được trả bằng **SVG placeholder** qua route
+  `GET /img/placeholder.svg?category=...&name=...` (file [placeholder.ts](../apps/api/src/routes/placeholder.ts)).
+- Màu sắc & emoji của placeholder tự đổi theo danh mục (Cà phê ☕, Trà 🍵, Sinh tố 🥭...).
+- Route này chỉ cần Workers + CORS, không đụng R2, không tốn egress.
 
-```
-✅ Created R2 bucket 'ecom-images'.
-```
+> 🔜 **Khi nào cần quay lại R2:** mở lại hoàn toàn tự động bằng cách
+> (1) bỏ comment `[[r2_buckets]]` trong [wrangler.toml](../apps/api/wrangler.toml),
+> (2) `wrangler r2 bucket create ecom-images`,
+> (3) re-implement route upload trong [placeholder.ts](../apps/api/src/routes/placeholder.ts)
+> (hoặc tạo lại `upload.ts`) để `PUT` file lên bucket và serve qua `/img/:key`.
 
 ---
 
@@ -176,9 +183,10 @@ database_id = "<PASTE-DATABASE-ID>"
 binding = "CART"
 id = "<PASTE-KV-ID>"
 
-[[r2_buckets]]
-binding = "IMAGES"
-bucket_name = "ecom-images"
+# Tạm thời ảnh dùng placeholder, R2 được giữ ở dạng comment:
+# [[r2_buckets]]
+# binding = "IMAGES"
+# bucket_name = "ecom-images"
 ```
 
 > ⚠️ **Đừng commit id thật vào git** nếu đây là repo public — nên dùng `.dev.vars`
@@ -260,8 +268,8 @@ Quá trình init sẽ:
 
 ### 8.2 Cập nhật URL backend trong production
 
-Ở local, [next.config.mjs](../apps/web/next.config.mjs) rewrite sang `http://localhost:8787`.
-Ở production phải trỏ sang **URL worker api thật**:
+Ở local, [next.config.mjs](../apps/web/next.config.mjs) rewrite `/api/*` **và `/img/*`**
+sang `http://localhost:8787`. Ở production phải trỏ sang **URL worker api thật**:
 
 ```bash
 # /apps/web
@@ -277,14 +285,21 @@ const apiUrl =
     : process.env.API_URL ?? "http://localhost:8787";
 
 async rewrites() {
-  return [{ source: "/api/:path*", destination: `${apiUrl}/api/:path*` }];
+  return [
+    { source: "/api/:path*", destination: `${apiUrl}/api/:path*` },
+    { source: "/img/:path*", destination: `${apiUrl}/img/:path*` }, // placeholder ảnh
+  ];
 }
 ```
+
+> Lưu ý: rewrite `/img/*` gồm cả placeholder SVG lẫn (sau này) ảnh R2 thật — cả hai
+> đều được phục vụ qua cùng worker api.
 
 > Ngoài ra bối cảnh production còn 2 cách khác:
 > - **Same-era bindings (service binding):** web gọi thẳng `env.api_worker.fetch(...)`
 >   thay vì fetch qua mạng — nhanh hơn, miễn phí egress. Setup trong `wrangler.jsonc`
->   của web bằng `[[services]] binding = "API" service = "ecom-api"`.
+>   của web bằng `[[services]] binding = "API" service = "ecom-api"`. Lưu ý với cách này
+>   cần thêm route ảnh tương ứng trong worker web.
 > - Hoặc đặt CORS sẵn có trên api (`cors()` đã bật trong `src/index.ts`) và để web gọi
 >   URL workers.dev trực tiếp.
 
@@ -342,9 +357,15 @@ curl -X POST https://ecom-api.<tên>.workers.dev/api/orders -H "content-type: ap
   -d '{"customer_id":"deploy-test","type":"instore","items":[{"id":1,"price":25000,"qty":1}],"total":25000}'
 curl https://ecom-api.<tên>.workers.dev/api/cart/deploy-test | head -c 120
 
+# Placeholder ảnh (SVG)
+curl -s -o /dev/null -w "placeholder=%{http_code} %{content_type}\n" \
+  "https://ecom-api.<tên>.workers.dev/img/placeholder.svg?category=C%C3%A0%20ph%C3%AA&name=Espresso"
+
 # Frontend (gọi qua rewrite cùng origin)
 curl -L -o /dev/null -w "%{http_code}\n" https://ecom-web.<tên>.workers.dev/
 curl -s https://ecom-web.<tên>.workers.dev/api/products | head -c 120     # JSON từ api
+curl -s -o /dev/null -w "-img-rewrite=%{http_code}\n" \
+  "https://ecom-web.<tên>.workers.dev/img/placeholder.svg?category=Tr%C3%A0&name=Tr%C3%A0%20%C4%91%C3%A0o"
 ```
 
 ### 10.2 Theo dõi log & KV
@@ -378,7 +399,7 @@ npx wrangler secret put ADMIN_TOKEN
 | Login | `npx wrangler login` | 1 lần / máy |
 | Tạo D1 | `cd apps/api && wrangler d1 create ecom-db` | lấy database_id |
 | Tạo KV | `cd apps/api && wrangler kv namespace create CART` | lấy id |
-| Tạo R2 | `cd apps/api && wrangler r2 bucket create ecom-images` | — |
+| Ảnh món | *(không cần — placeholder SVG tự sinh ở `/img/placeholder.svg`)* | R2 optional |
 | Sửa config | edit `apps/api/wrangler.toml` | paste id thật |
 | Deploy API | `npm -w apps/api run deploy` | worker `ecom-api` |
 | Seed remote | `npm -w apps/api run seed -- --remote` *(xem lưu ý dưới)* | hoặc `wrangler d1 execute ... --remote` |
@@ -399,7 +420,7 @@ npx wrangler secret put ADMIN_TOKEN
 | Workers | 100.000 req/ngày — miễn phí | ✅ vừa đủ |
 | D1 | 5M read + 100K write/ngày, 5GB dung lượng | ✅ |
 | KV | 100K read + 1K write/ngày, 1GB | ✅ |
-| R2 (cấu trúc) | 10GB storage + 1M egress/tháng | ✅ |
+| R2 (optional — đang tắt) | 10GB storage + 1M egress/tháng | ⏸️ chưa dùng |
 
 → **Toàn bộ chi phí = 0đ** nếu dùng free plan với traffic nhỏ như quán cafe.
 
@@ -411,8 +432,9 @@ npx wrangler secret put ADMIN_TOKEN
 → chạy từ thư mục có `wrangler.toml` hoặc chỉ rõ `wrangler deploy src/index.ts`.
 
 ### 2. API trả 500 khi gọi bảng
-→ bindings sai. Kiểm tra `npx wrangler deploy --dry-run`, xác nhận `database_id`, `id`,
-`bucket_name` khớp object vừa tạo. Chưa seed remote cũng gây lỗi bảng thiếu → chạy Bước 5.
+→ bindings sai. Kiểm tra `npx wrangler deploy --dry-run`, xác nhận `database_id` và `id`
+trong [wrangler.toml](../apps/api/wrangler.toml) khớp object vừa tạo. Chưa seed remote
+cũng gây lỗi bảng thiếu → chạy Bước 5.
 
 ### 3. `/api/products` trả `[]` (rỗng) trên production
 → chưa `--remote --file=./data/seed.sql`.
@@ -428,7 +450,12 @@ hoặc cập nhật nhánh production trong config.
 ### 6. Ứng dụng CORS khi frontend ở domain A gọi api ở domain B
 → api đã có `cors()`; nếu cần chặn origin lạ, hẹp lại trong `app.use("/api/*", cors({ origin: ["https://ecom-web.<tên>.workers.dev"] }))`.
 
-### 7. `wrangler login` mở browser nhưng bị treo màn hình trống
+### 7. Placeholder ảnh không hiện (trả 404 / rỗng)
+→ xác nhận route `/img/placeholder.svg` vẫn được mount trong [index.ts](../apps/api/src/index.ts)
+(`app.route("/img", placeholder)`) và rewrite `/img/*` có trong [next.config.mjs](../apps/web/next.config.mjs).
+Test trực tiếp: `curl https://ecom-api.<tên>.workers.dev/img/placeholder.svg?...` (trả `image/svg+xml`).
+
+### 8. `wrangler login` mở browser nhưng bị treo màn hình trống
 → đăng nhập thủ công tại https://dash.cloudflare.com → account → API Tokens → tạo token
 editable Workers, rồi chạy `export CLOUDFLARE_API_TOKEN=...` trước khi deploy.
 
@@ -449,8 +476,10 @@ editable Workers, rồi chạy `export CLOUDFLARE_API_TOKEN=...` trước khi de
   `nodejs_compat` bật.
 - **KV eventual consistency:** ghi giỏ hàng có thể mất ~vài chục giây để "thấy" ở mọi
   vùng trên toàn cầu — không ảnh hưởng use-case quán cafe 1 chi nhánh.
-- **R2 serving:** ảnh được phục vụ qua `/img/*` proxy từ worker (đã viết route) — nếu
-  dùng nhiều ảnh, nâng cấp CDN cache hoặc public bucket qua `wrangler r2 bucket website`.
+- **Ảnh hiện tại:** dùng **SVG placeholder** sinh nhanh tại worker (`/img/placeholder.svg`) —
+  miễn phí, không tốn egress, tự đổi màu theo danh mục. Khi chuyển sang R2 (ảnh thật),
+  tạo lại route upload và được phục vụ qua `/img/:key`; với nhiều ảnh nên cân nhắc
+  CDN cache hoặc public bucket (`wrangler r2 bucket website`).
 
 ---
 
