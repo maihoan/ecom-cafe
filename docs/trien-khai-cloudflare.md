@@ -307,7 +307,6 @@ async rewrites() {
 
 ```bash
 cd apps/web
-npx opennextjs-cloudflare build
 npx wrangler deploy
 ```
 
