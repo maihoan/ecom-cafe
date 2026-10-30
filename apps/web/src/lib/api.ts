@@ -1,4 +1,4 @@
-// Client gọi API (cùng-origin qua Next rewrite /api/* -> Hono worker).
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8787";
 
 export interface Product {
   id: number;
@@ -28,7 +28,7 @@ export interface Order {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: { "content-type": "application/json", ...(init?.headers || {}) },
   });

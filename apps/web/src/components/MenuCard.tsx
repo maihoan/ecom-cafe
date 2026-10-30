@@ -1,4 +1,4 @@
-import type { Product } from "@/lib/api";
+import { API_URL, type Product } from "@/lib/api";
 
 /** Card hiển thị một món trong menu. */
 export default function MenuCard({ product, onAdd }: { product: Product; onAdd: (p: Product) => void }) {
@@ -8,7 +8,7 @@ export default function MenuCard({ product, onAdd }: { product: Product; onAdd: 
       <img
         src={
           product.image_url ||
-          `/img/placeholder.svg?category=${encodeURIComponent(product.category)}&name=${encodeURIComponent(product.name)}`
+          `${API_URL}/img/placeholder.svg?category=${encodeURIComponent(product.category)}&name=${encodeURIComponent(product.name)}`
         }
         alt={product.name}
         loading="lazy"

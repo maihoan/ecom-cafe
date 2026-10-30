@@ -1,0 +1,27 @@
+{
+  // Cấu hình Cloudflare Worker cho frontend Next.js (OpenNext build output).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ecom-web",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "services": [
+    {
+      // Self-reference service binding bắt buộc cho OpenNext
+      "binding": "WORKER_SELF_REFERENCE",
+      "service": "ecom-web"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      // KV incremental cache của OpenNext
+      "binding": "NEXT_INC_CACHE_KV",
+      "id": "185808d3620d42a9b3eeb14e7f725a8e"
+    }
+  ]
+}

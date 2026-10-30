@@ -1,172 +1,158 @@
-# Hướng dẫn Triển khai lên Cloudflare — Ecommerce Cafe
+# Hướng dẫn triển khai lên Cloudflare — Ecommerce Cafe
 
-Tài liệu chi tiết hướng dẫn deploy toàn bộ dự án Ecommerce Cafe lên nền tảng
-**Cloudflare** (Workers + D1 + KV). Viết dựa trên cấu trúc dự án hiện tại
-(monorepo `apps/api` + `apps/web`) và trạng thái chưa đăng nhập Cloudflare.
+Tài liệu này hướng dẫn đưa dự án **Ecommerce Cafe** lên Cloudflare bằng chính tài khoản của bạn. Sau khi làm xong, bạn sẽ có hai Worker đang chạy trên Internet:
 
-> 💡 **Về hình ảnh món:** dự án hiện **tạm thời KHÔNG dùng R2** cho ảnh — back-end
-> sinh **SVG placeholder** (`/img/placeholder.svg`) thay thế. R2 vẫn được khai báo sẵn
-> trong [wrangler.toml](../apps/api/wrangler.toml) (comment) để bật lại khi cần upload
-> ảnh thật. Phần lớn tài liệu này không đụng tới R2.
+| Worker | Địa chỉ mẫu | Vai trò |
+|---|---|---|
+| `ecom-api` | `https://ecom-api.<subdomain>.workers.dev` | Backend Hono, đọc/ghi D1 và KV |
+| `ecom-web` | `https://ecom-web.<subdomain>.workers.dev` | Frontend Next.js (trang menu, giỏ hàng, admin) |
+
+Tài liệu được viết để sinh viên **làm lại từ đầu** được. Bạn nên làm xong [chạy local](chay-local.md) trước.
+
+> ⚠️ **Đọc trước khi bắt đầu:**
+> - Repo đang chứa **id tài nguyên của giảng viên** trong `apps/api/wrangler.toml` và `apps/web/wrangler.jsonc`. Bạn **phải thay bằng id của chính bạn** ở bước 4 và bước 7. Nếu không, bạn sẽ ghi dữ liệu vào database của người khác (hoặc lỗi quyền truy cập).
+> - Không deploy lên tài nguyên của người khác và không chạy seed `--remote` lên database không phải của bạn.
+> - Admin hiện **chưa có đăng nhập**: ai biết URL `/admin` đều sửa được món. Chỉ dùng cho bài thực hành.
 
 ---
 
 ## Mục lục
 
 1. [Tổng quan quy trình](#1-tổng-quan-quy-trình)
-2. [Điều kiện tiên quyết](#2-điều-kiện-tiên-quyết)
+2. [Yêu cầu](#2-yêu-cầu)
 3. [Bước 1 — Đăng nhập Cloudflare](#3-bước-1--đăng-nhập-cloudflare)
-4. [Bước 2 — Tạo tài nguyên (D1 / KV)](#4-bước-2--tạo-tài-nguyên-d1--kv)
-5. [Bước 3 — Cập nhật `wrangler.toml`](#5-bước-3--cập-nhật-wranglertoml)
-6. [Bước 4 — Deploy Backend (apps/api)](#6-bước-4--deploy-backend-appsapi)
-7. [Bước 5 — Nạp schema & seed lên D1 remote](#7-bước-5--nạp-schema--seed-lên-d1-remote)
-8. [Bước 6 — Deploy Frontend (apps/web)](#8-bước-6--deploy-frontend-appsweb)
-9. [Bước 7 — Domain & HTTPS](#9-bước-7--domain--https)
-10. [Kiểm tra sau deploy & vận hành](#10-kiểm-tra-sau-deploy--vận-hành)
-11. [Bảng tham chiếu lệnh](#11-bảng-tham-chiếu-lệnh)
-12. [Chi phí / Free tier](#12-chi-phí--free-tier)
-13. [Troubleshooting deploy](#13-troubleshooting-deploy)
-14. [Lưu ý bảo mật & giới hạn](#14-lưu-ý-bảo-mật--giới-hạn)
+4. [Bước 2 — Tạo D1 database và KV namespace](#4-bước-2--tạo-d1-database-và-kv-namespace)
+5. [Bước 3 — Cập nhật cấu hình backend](#5-bước-3--cập-nhật-cấu-hình-backend)
+6. [Bước 4 — Deploy backend `ecom-api`](#6-bước-4--deploy-backend-ecom-api)
+7. [Bước 5 — Nạp schema và dữ liệu mẫu lên D1 remote](#7-bước-5--nạp-schema-và-dữ-liệu-mẫu-lên-d1-remote)
+8. [Bước 6 — Cấu hình và build frontend](#8-bước-6--cấu-hình-và-build-frontend)
+9. [Bước 7 — Deploy frontend `ecom-web`](#9-bước-7--deploy-frontend-ecom-web)
+10. [Bước 8 — Kiểm tra sau deploy](#10-bước-8--kiểm-tra-sau-deploy)
+11. [Cập nhật lại sau khi sửa code](#11-cập-nhật-lại-sau-khi-sửa-code)
+12. [Bảng tham chiếu lệnh](#12-bảng-tham-chiếu-lệnh)
+13. [Xử lý sự cố](#13-xử-lý-sự-cố)
+14. [Chi phí và giới hạn](#14-chi-phí-và-giới-hạn)
+15. [Bài tập gợi ý](#15-bài-tập-gợi-ý)
 
 ---
 
 ## 1. Tổng quan quy trình
 
 ```
-┌────────────┐   wrangler login    ┌──────────────────────┐
-│  Cloudflare│ ◄━━━━━━━━━━━━━━━━━ ►│  trình duyệt / account│
-│   Account   │                     └──────────────────────┘
-└──────┬──────┘
-       │
-  ┌────┴─────────────────────────────────────────────┐
-  │ 1. wrangler d1 create ecom-db        → D1 (SQL)  │
-  │ 2. wrangler kv namespace create CART → KV (giỏ)  │
-  │ 3. sửa apps/api/wrangler.toml với id thật        │
-  └──────────────────────────────────────────────────┘
-       │
-  ┌────┴─────────────────────────────────────────────┐
-  │ 5. npm run deploy (apps/api)         → Worker API │
-  │ 6. wrangler d1 execute --remote      → seed D1    │
-  │ 7. npx opennextjs-cloudflare build   → Worker Web  │
-  └──────────────────────────────────────────────────┘
+ Máy bạn                                     Cloudflare (tài khoản của bạn)
+ ───────                                     ────────────────────────────────
+ (1) wrangler login  ─────────────────────►  xác thực tài khoản
+ (2) d1 create / kv namespace create ─────►  D1: ecom-db
+                                             KV: CART, NEXT_INC_CACHE_KV
+ (3) sửa id trong wrangler.toml / .jsonc
+ (4) wrangler deploy (apps/api) ──────────►  Worker ecom-api
+ (5) d1 execute --remote seed.sql ────────►  nạp bảng + 10 món vào D1
+ (6) build frontend với NEXT_PUBLIC_API_URL
+ (7) wrangler deploy (apps/web) ──────────►  Worker ecom-web
+ (8) kiểm tra bằng curl và trình duyệt
 ```
 
-**Có 2 worker riêng biệt sau khi deploy:**
+Có hai điểm dễ nhầm nhất, cần nhớ:
 
-| Worker | URL mặc định | Vai trò |
-|---|---|---|
-| `ecom-api` | `https://ecom-api.<subdomain>.workers.dev` | Backend Hono (D1/KV, ảnh = placeholder) |
-| `ecom-web` | `https://ecom-web.<subdomain>.workers.dev` | Frontend Next.js + Admin |
+- **Frontend đọc địa chỉ backend lúc build**, không đọc lúc chạy. Đổi `NEXT_PUBLIC_API_URL` thì phải build lại.
+- **Mỗi Worker có cấu hình riêng**: `apps/api/wrangler.toml` cho backend, `apps/web/wrangler.jsonc` cho frontend.
 
 ---
 
-## 2. Điều kiện tiên quyết
+## 2. Yêu cầu
 
-| Thứ | Trạng thái hiện tại | Cần cho deploy |
+| Thứ | Yêu cầu | Kiểm tra |
 |---|---|---|
-| Node.js ≥ 18 | ✅ v24 | — |
-| wrangler | ✅ 4.x (đã cài trong `apps/api`) | — |
-| **Tài khoản Cloudflare** | ❌ chưa đăng nhập | **Bắt buộc** (miễn phí) |
-| Domain riêng | — | Tùy chọn (không bắt buộc, dùng `workers.dev`) |
+| Node.js | ≥ 18 | `node -v` |
+| npm | ≥ 10 | `npm -v` |
+| Tài khoản Cloudflare | Miễn phí (free plan) | đăng ký tại dash.cloudflare.com |
+| Đã cài dependencies | Đã làm `npm install` ở gốc | `ls node_modules` |
+| Đã chạy local OK | Khuyến nghị | xem [chay-local.md](chay-local.md) |
 
-> 💡 Tài khoản Cloudflare **free plan** đủ để chạy dự án này.
+> Tài khoản free đủ dùng cho dự án này. Không cần domain riêng: mỗi Worker có sẵn địa chỉ `*.workers.dev` có HTTPS.
+
+**Lưu ý về tên:** tài khoản Cloudflare của bạn có một **subdomain** riêng (ví dụ `sv-an.workers.dev`). Mọi URL trong tài liệu này viết `<subdomain>` để bạn thay bằng subdomain của mình. Lấy subdomain ở trang Workers & Pages trên dashboard, hoặc sau khi deploy lần đầu sẽ thấy trong output.
 
 ---
 
 ## 3. Bước 1 — Đăng nhập Cloudflare
 
-Từ thư mục gốc dự án (hoặc `apps/api`):
+Từ thư mục gốc dự án:
 
 ```bash
 npx wrangler login
 ```
 
-Trình duyệt tự mở trang Cloudflare → chọn account → **Allow**.
-Kiểm tra đã đăng nhập:
+Trình duyệt mở trang xác thực → chọn account → **Allow**. Quay lại terminal, kiểm tra:
 
 ```bash
 npx wrangler whoami
 ```
 
-Kết quả tốt (dạng):
+**Kết quả mong đợi:** có tên account và danh sách quyền (Workers, D1, KV...). Nếu thấy `You are not logged in`, chạy lại `wrangler login`.
 
-```
-When logged in, your supported actions include:
-  ✓ Creating and managing projects
-  ✓ Interacting with Workers
-  ...
-```
-
-> 🔁 Nếu không có trình duyệt (server headless): dùng `wrangler login` với option
-> `--browser=false` + lấy `CF_API_TOKEN` tại https://dash.cloudflare.com/profile/api-tokens,
-> rồi `CLOUDFLARE_API_TOKEN=<token> CLOUDFLARE_ACCOUNT_ID=<id>` (đặt trong `.env` — đã ignored).
+> 🔁 **Không có trình duyệt** (máy headless hoặc lỗi mở trang): tạo API token tại https://dash.cloudflare.com/profile/api-tokens với quyền Workers Scripts, D1, Workers KV Storage. Rồi đặt biến môi trường trước khi chạy lệnh:
+> ```bash
+> export CLOUDFLARE_API_TOKEN=<token-của-bạn>
+> ```
+> (PowerShell: `$env:CLOUDFLARE_API_TOKEN="<token>"`). Không commit token vào git.
 
 ---
 
-## 4. Bước 2 — Tạo tài nguyên (D1 / KV)
+## 4. Bước 2 — Tạo D1 database và KV namespace
 
-Chạy từ thư mục `apps/api` (nơi có `wrangler.toml`):
+Tài nguyên được tạo trong **tài khoản của bạn**, nên id sẽ khác với id trong repo.
+
+### 4.1 Tạo D1 database
 
 ```bash
 cd apps/api
-```
-
-### 4.1 Tạo database D1
-
-```bash
 npx wrangler d1 create ecom-db
 ```
 
-Output dạng:
+**Kết quả mong đợi** có khối cấu hình kèm `database_id`:
 
 ```
-✅ Successfully created DB 'ecom-db' in region APAC
-Created your new D1 database.
+✅ Successfully created DB 'ecom-db' in region ...
 [[d1_databases]]
-binding = "DB" = "DB"
+binding = "DB"
 database_name = "ecom-db"
-database_id = "<UUID-THAT-YOU-WILL-PASTE>"
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
-> Chú ý: màn hình deploy có thể gợi ý thêm `migrations_dir` — dự án dùng
-> `wrangler d1 execute --file` nên ta **không cần**.
+**Ghi lại `database_id`.** Nếu báo lỗi tên đã tồn tại, hãy đổi tên, ví dụ `ecom-db-<tên-bạn>`, và dùng tên đó ở các bước sau (cả trong `wrangler.toml` và lệnh `d1 execute`).
 
-### 4.2 Tạo KV namespace
+### 4.2 Tạo KV namespace cho giỏ hàng
 
 ```bash
 npx wrangler kv namespace create CART
 ```
 
-Output dạng:
+**Ghi lại `id`** trong output.
 
+### 4.3 Tạo KV namespace cho cache của Next.js
+
+Frontend cần một KV riêng để OpenNext lưu cache (binding `NEXT_INC_CACHE_KV`). Dùng namespace riêng để không lẫn với giỏ hàng:
+
+```bash
+npx wrangler kv namespace create NEXT_INC_CACHE_KV
 ```
-✅ Successfully created namespace with id "<KV-ID>".
-[[kv_namespaces]]
-binding = "CART"
-id = "<KV-ID>"
+
+**Ghi lại `id`** thứ hai.
+
+> 💡 Muốn xem lại danh sách: `npx wrangler d1 list` và `npx wrangler kv namespace list`.
+
+Quay về thư mục gốc:
+
+```bash
+cd ../..
 ```
-
-### 4.3 Về ảnh món — không cần R2 (dùng placeholder)
-
-Dự án hiện **không tạo R2 bucket nào** khi deploy:
-
-- Ảnh món được trả bằng **SVG placeholder** qua route
-  `GET /img/placeholder.svg?category=...&name=...` (file [placeholder.ts](../apps/api/src/routes/placeholder.ts)).
-- Màu sắc & emoji của placeholder tự đổi theo danh mục (Cà phê ☕, Trà 🍵, Sinh tố 🥭...).
-- Route này chỉ cần Workers + CORS, không đụng R2, không tốn egress.
-
-> 🔜 **Khi nào cần quay lại R2:** mở lại hoàn toàn tự động bằng cách
-> (1) bỏ comment `[[r2_buckets]]` trong [wrangler.toml](../apps/api/wrangler.toml),
-> (2) `wrangler r2 bucket create ecom-images`,
-> (3) re-implement route upload trong [placeholder.ts](../apps/api/src/routes/placeholder.ts)
-> (hoặc tạo lại `upload.ts`) để `PUT` file lên bucket và serve qua `/img/:key`.
 
 ---
 
-## 5. Bước 3 — Cập nhật `wrangler.toml`
+## 5. Bước 3 — Cập nhật cấu hình backend
 
-Mở [apps/api/wrangler.toml](../apps/api/wrangler.toml) và thay các **giá trị placeholder**
-bằng id thật vừa tạo (có thể thêm `preview_database_id`/`preview_bucket_name` nếu muốn).
+Mở [apps/api/wrangler.toml](../apps/api/wrangler.toml) và thay id:
 
 ```toml
 name = "ecom-api"
@@ -177,309 +163,314 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "ecom-db"
-database_id = "<PASTE-DATABASE-ID>"
+database_id = "<DATABASE-ID-CỦA-BẠN>"
 
 [[kv_namespaces]]
 binding = "CART"
-id = "<PASTE-KV-ID>"
-
-# Tạm thời ảnh dùng placeholder, R2 được giữ ở dạng comment:
-# [[r2_buckets]]
-# binding = "IMAGES"
-# bucket_name = "ecom-images"
-```
-
-> ⚠️ **Đừng commit id thật vào git** nếu đây là repo public — nên dùng `.dev.vars`
-> hoặc tách `wrangler.<env>.toml` cho production.
-
----
-
-## 6. Bước 4 — Deploy Backend (apps/api)
-
-```bash
-cd apps/api
-npx wrangler deploy
-```
-
-Thành công:
-
-```
-✔ Deployed ecom-api
-  https://ecom-api.<tên>.workers.dev
-```
-
-Kiểm tra lập tức:
-
-```bash
-curl https://ecom-api.<tên>.workers.dev/api/products
-```
-
-→ Trả `{"products":[]}` là đúng (chưa seed remote). Trả 500 = cần kiểm tra bindings/log.
-
-> 📝 Script `apps/api/package.json` đã có `"deploy": "wrangler deploy"`,
-> từ gốc dự án chạy: `npm -w apps/api run deploy`.
-
----
-
-## 7. Bước 5 — Nạp schema & seed lên D1 remote
-
-Giống lệnh local nhưng thêm cờ **`--remote`**:
-
-```bash
-cd apps/api
-npx wrangler d1 execute ecom-db --remote --file=./data/seed.sql
-```
-
-Output:
-
-```
-🚣 3 commands executed successfully.
+id = "<KV-CART-ID-CỦA-BẠN>"
 ```
 
 Kiểm tra:
 
-```bash
-curl https://ecom-api.<tên>.workers.dev/api/products
-# → {"products":[{"id":1,"name":"Cà phê sữa đá",...}, ...]} 10 món ✅
-```
-
-> 🔁 Chạy lại lệnh này mỗi khi sửa schema — `CREATE TABLE IF NOT EXISTS` + `INSERT OR REPLACE`
-> trong seed làm việc này **idempotent** (chạy nhiều lần không lỗi).
+- `name = "ecom-api"` sẽ thành tên Worker và phần đầu URL `ecom-api.<subdomain>.workers.dev`. Đổi tên nếu bạn muốn URL khác.
+- Khối `[[r2_buckets]]` đang được comment. **Không cần R2**: ảnh món dùng SVG placeholder do backend sinh ra.
 
 ---
 
-## 8. Bước 6 — Deploy Frontend (apps/web)
-
-> ⚠️ **Điểm cần lưu ý:** Next.js **không chạy trực tiếp** trên Workers như một
-> Worker Hono. Cần adapter **OpenNext for Cloudflare** (`@opennextjs/cloudflare`)
-> để biên dịch Next.js thành Worker.
-
-### 8.1 Cài & init adapter
+## 6. Bước 4 — Deploy backend `ecom-api`
 
 ```bash
-cd apps/web
-npx @opennextjs/cloudflare@latest init
-```
-
-Quá trình init sẽ:
-- Thêm `@opennextjs/cloudflare`, `@cloudflare/workers-types` vào devDependencies.
-- Tạo `wrangler.jsonc` (hoặc cấu hình mới) cho web worker.
-- Có thể tạo `open-next.config.ts`.
-
-### 8.2 Cập nhật URL backend trong production
-
-Ở local, [next.config.mjs](../apps/web/next.config.mjs) rewrite `/api/*` **và `/img/*`**
-sang `http://localhost:8787`. Ở production phải trỏ sang **URL worker api thật**:
-
-```bash
-# /apps/web
-API_URL=https://ecom-api.<tên>.workers.dev npm run build
-```
-
-Hoặc tách cấu hình theo env trong `next.config.mjs` (khuyến nghị):
-
-```js
-const apiUrl =
-  process.env.NODE_ENV === "production"
-    ? process.env.API_URL ?? "https://ecom-api.<tên>.workers.dev"
-    : process.env.API_URL ?? "http://localhost:8787";
-
-async rewrites() {
-  return [
-    { source: "/api/:path*", destination: `${apiUrl}/api/:path*` },
-    { source: "/img/:path*", destination: `${apiUrl}/img/:path*` }, // placeholder ảnh
-  ];
-}
-```
-
-> Lưu ý: rewrite `/img/*` gồm cả placeholder SVG lẫn (sau này) ảnh R2 thật — cả hai
-> đều được phục vụ qua cùng worker api.
-
-> Ngoài ra bối cảnh production còn 2 cách khác:
-> - **Same-era bindings (service binding):** web gọi thẳng `env.api_worker.fetch(...)`
->   thay vì fetch qua mạng — nhanh hơn, miễn phí egress. Setup trong `wrangler.jsonc`
->   của web bằng `[[services]] binding = "API" service = "ecom-api"`. Lưu ý với cách này
->   cần thêm route ảnh tương ứng trong worker web.
-> - Hoặc đặt CORS sẵn có trên api (`cors()` đã bật trong `src/index.ts`) và để web gọi
->   URL workers.dev trực tiếp.
-
-### 8.3 Build & deploy
-
-```bash
-cd apps/web
+cd apps/api
 npx wrangler deploy
 ```
 
-Thành công:
+**Kết quả mong đợi:**
 
 ```
-✔ Deployed ecom-web
-  https://ecom-web.<tên>.workers.dev
+Uploaded ecom-api ...
+Deployed ecom-api triggers ...
+  https://ecom-api.<subdomain>.workers.dev
 ```
 
-> ⚠️ Trước khi build lần đầu nhớ cập nhật `wrangler.jsonc`/`wrangler.toml` của web với
-> 2 lỗng thường gặp:
-> - `compatibility_flags = ["nodejs_compat"]` để Next runtime chạy đủ Node APIs.
-> - Nếu dùng service binding, khai báo `[[services]]`.
+Ghi lại URL này. Bạn sẽ cần nó ở bước 6.
+
+Kiểm tra nhanh:
+
+```bash
+curl https://ecom-api.<subdomain>.workers.dev/
+```
+
+→ JSON `"name": "Ecom Cafe API"`. Chưa seed nên `/api/products` sẽ chưa có dữ liệu (bước 5 sẽ sửa).
+
+```bash
+cd ../..
+```
 
 ---
 
-## 9. Bước 7 — Domain & HTTPS
+## 7. Bước 5 — Nạp schema và dữ liệu mẫu lên D1 remote
 
-### Tuỳ chọn A — Worker dùng domain custom (recommended)
-
-```bash
-npx wrangler domains add app.example.com
-# hoặc thêm vào wrangler.toml:
-# workers_dev = false
-# routes = [{ pattern = "app.example.com", zone_id = "<ZONE-ID>" }]
-# Trỏ CNAME app.example.com → workers.dev tương ứng trong DNS zone nếu cần.
-```
-
-### Tuỳ chọn B — Chỉ dùng `workers.dev` (miễn phí, đủ demo)
-
-Không cần làm gì — mỗi worker đã có URL `*.workers.dev` kèm HTTPS wildcard của Cloudflare.
-
-> Gợi ý hướng domain product: `menu.tenquan.com` (web) — CNAME → ecom-web...workers.dev;
-> `api.tenquan.com` (api) — CNAME → ecom-api...workers.dev, để tránh phụ thuộc tên nội bộ.
-
----
-
-## 10. Kiểm tra sau deploy & vận hành
-
-### 10.1 Checklist sau deploy
+Từ `apps/api`, chạy đúng database **của bạn** với cờ `--remote`:
 
 ```bash
-# API trực tiếp
-curl https://ecom-api.<tên>.workers.dev/api/products                     # 10 món
-curl -X POST https://ecom-api.<tên>.workers.dev/api/orders -H "content-type: application/json" \
-  -d '{"customer_id":"deploy-test","type":"instore","items":[{"id":1,"price":25000,"qty":1}],"total":25000}'
-curl https://ecom-api.<tên>.workers.dev/api/cart/deploy-test | head -c 120
-
-# Placeholder ảnh (SVG)
-curl -s -o /dev/null -w "placeholder=%{http_code} %{content_type}\n" \
-  "https://ecom-api.<tên>.workers.dev/img/placeholder.svg?category=C%C3%A0%20ph%C3%AA&name=Espresso"
-
-# Frontend (gọi qua rewrite cùng origin)
-curl -L -o /dev/null -w "%{http_code}\n" https://ecom-web.<tên>.workers.dev/
-curl -s https://ecom-web.<tên>.workers.dev/api/products | head -c 120     # JSON từ api
-curl -s -o /dev/null -w "-img-rewrite=%{http_code}\n" \
-  "https://ecom-web.<tên>.workers.dev/img/placeholder.svg?category=Tr%C3%A0&name=Tr%C3%A0%20%C4%91%C3%A0o"
-```
-
-### 10.2 Theo dõi log & KV
-
-```bash
-npx wrangler tail --format pretty            # stream request live (from apps/api)
-npx wrangler kv key list --namespace-id "<KV-ID>"
-```
-
-### 10.3 Rollback / redeploy
-
-```bash
-npx wrangler deploy --dry-run                # xem diff build trước khi đẩy
-npx wrangler rollback                        # quay lại version trước
-```
-
-### 10.4 Biến môi trường production (secret)
-
-```bash
-# VD: khoá admin nếu dùng sau này
 cd apps/api
-npx wrangler secret put ADMIN_TOKEN
+npx wrangler d1 execute ecom-db --remote --file=./data/seed.sql
+cd ../..
+```
+
+> Nếu bạn đổi tên database ở bước 4.1, thay `ecom-db` bằng tên đó.
+
+**Kết quả mong đợi:** thông báo số lệnh đã chạy thành công (ví dụ `... commands executed successfully`).
+
+Kiểm tra:
+
+```bash
+curl https://ecom-api.<subdomain>.workers.dev/api/products
+```
+
+→ 10 món, ví dụ `"name":"Cà phê sữa đá"`.
+
+> 🔁 Seed là **idempotent** (dùng `CREATE TABLE IF NOT EXISTS` và `INSERT OR REPLACE`), nên chạy lại nhiều lần không lỗi. Nhưng `INSERT OR REPLACE` ghi đè món cùng `id`: nếu bạn đã sửa món trên admin, chạy lại seed sẽ hoàn lại giá trị gốc.
+
+---
+
+## 8. Bước 6 — Cấu hình và build frontend
+
+### 8.1 Đặt id KV cho frontend
+
+Mở [apps/web/wrangler.jsonc](../apps/web/wrangler.jsonc), thay id ở `kv_namespaces`:
+
+```jsonc
+"kv_namespaces": [
+  {
+    "binding": "NEXT_INC_CACHE_KV",
+    "id": "<KV-NEXT_INC_CACHE_KV-ID-CỦA-BẠN>"
+  }
+]
+```
+
+Các phần khác trong file này không cần sửa:
+
+- `main: ".open-next/worker.js"` — file do OpenNext sinh ra khi build.
+- `assets` — phục vụ file tĩnh (`/_next/static/...`). `not_found_handling: "single-page-application"` đảm bảo đường dẫn lạ vẫn vào được Worker.
+- `services` với `WORKER_SELF_REFERENCE` — OpenNext bắt buộc khai báo.
+
+### 8.2 Build với địa chỉ backend thật
+
+Frontend cần biết địa chỉ backend **của bạn** tại thời điểm build. Đặt biến `NEXT_PUBLIC_API_URL` ngay trước lệnh build.
+
+**Git Bash / macOS / Linux:**
+
+```bash
+cd apps/web
+NEXT_PUBLIC_API_URL=https://ecom-api.<subdomain>.workers.dev npx opennextjs-cloudflare build
+```
+
+**PowerShell (Windows):**
+
+```powershell
+cd apps/web
+$env:NEXT_PUBLIC_API_URL="https://ecom-api.<subdomain>.workers.dev"
+npx opennextjs-cloudflare build
+```
+
+**Kết quả mong đợi:** cuối log có `OpenNext build complete.` và thư mục `.open-next/` được tạo.
+
+> ⚠️ **Bỏ qua biến này là lỗi phổ biến nhất.** Nếu build mà không đặt `NEXT_PUBLIC_API_URL`, frontend sẽ gọi `http://localhost:8787` — trình duyệt của người dùng không có gì ở đó, nên menu sẽ không tải được.
+
+**Kiểm tra địa chỉ đã được nhúng đúng:**
+
+```bash
+grep -rl "ecom-api.<subdomain>.workers.dev" .open-next/assets/_next/static | head -3
+```
+
+→ Có ít nhất một file trong `.open-next/assets/_next/static/chunks/app/`.
+
+> Không chạy `npx opennextjs-cloudflare migrate` — lệnh này hỏi tương tác và sẽ treo trong terminal không có TTY. Bước này không cần thiết cho dự án.
+
+---
+
+## 9. Bước 7 — Deploy frontend `ecom-web`
+
+Vẫn trong `apps/web`:
+
+```bash
+npx wrangler deploy
+```
+
+**Kết quả mong đợi:**
+
+```
+Uploaded ecom-web ...
+Deployed ecom-web triggers ...
+  https://ecom-web.<subdomain>.workers.dev
+```
+
+Mở URL này trên trình duyệt. Quay về thư mục gốc:
+
+```bash
+cd ../..
 ```
 
 ---
 
-## 11. Bảng tham chiếu lệnh
+## 10. Bước 8 — Kiểm tra sau deploy
 
-| Bước | Lệnh (từ gốc `d:\ecom`) | Ghi chú |
+### 10.1 Kiểm tra bằng curl
+
+```bash
+API=https://ecom-api.<subdomain>.workers.dev
+WEB=https://ecom-web.<subdomain>.workers.dev
+
+# Backend
+curl -s -o /dev/null -w "api root      %{http_code}\n" $API/
+curl -s $API/api/products | head -c 120; echo
+
+# Ghi đơn hàng thử (xóa sau, xem 10.3)
+curl -s -X POST $API/api/orders -H "content-type: application/json" \
+  -d '{"customer_id":"deploy-test","type":"instore","items":[{"id":1,"price":25000,"qty":1}],"total":25000}'; echo
+
+# Ảnh placeholder
+curl -s -o /dev/null -w "placeholder    %{http_code} %{content_type}\n" \
+  "$API/img/placeholder.svg?category=C%C3%A0%20ph%C3%AA&name=Espresso"
+
+# Frontend
+curl -s -o /dev/null -w "web /          %{http_code}\n" $WEB/
+curl -s -o /dev/null -w "web /cart      %{http_code}\n" $WEB/cart
+curl -s -o /dev/null -w "web /admin     %{http_code}\n" $WEB/admin
+```
+
+**Kết quả mong đợi:** `api root 200`, `placeholder 200 image/svg+xml`, các trang web đều `200`, và `/api/products` trả JSON 10 món.
+
+### 10.2 Kiểm tra bằng trình duyệt
+
+1. Mở `https://ecom-web.<subdomain>.workers.dev` — thấy menu 10 món, ảnh SVG hiện đúng.
+2. Thêm món vào giỏ, vào `/cart`, đặt một đơn "tại quán" — thấy mã đơn.
+3. Mở `/admin` — thấy đơn vừa đặt.
+
+> Nếu trang chủ trống, mở DevTools (F12) → tab Network. Các request tới `ecom-api...workers.dev` phải trả `200`. Nếu thấy request tới `localhost:8787`, bạn đã quên đặt `NEXT_PUBLIC_API_URL` ở bước 8.2 — build lại.
+
+### 10.3 Dọn dữ liệu thử
+
+Đơn `deploy-test` ở trên vẫn nằm trong D1. Xóa nó:
+
+```bash
+cd apps/api
+npx wrangler d1 execute ecom-db --remote --command "DELETE FROM orders WHERE customer_id='deploy-test';"
+cd ../..
+```
+
+### 10.4 Xem log khi có lỗi
+
+```bash
+cd apps/api
+npx wrangler tail
+```
+
+Lệnh giữ kết nối và in log realtime của `ecom-api`. Mở một tab khác, thao tác lại, rồi xem log. Với frontend, chạy `npx wrangler tail` trong `apps/web`.
+
+---
+
+## 11. Cập nhật lại sau khi sửa code
+
+| Bạn sửa gì | Cần làm |
+|---|---|
+| Code trong `apps/api/src/` | `cd apps/api && npx wrangler deploy` |
+| Schema hoặc dữ liệu mẫu (`seed.sql`) | `cd apps/api && npx wrangler d1 execute ecom-db --remote --file=./data/seed.sql` (rồi deploy nếu code đổi) |
+| Code trong `apps/web/src/` | build lại (bước 8.2) rồi `cd apps/web && npx wrangler deploy` |
+| Đổi địa chỉ backend | build lại frontend với `NEXT_PUBLIC_API_URL` mới, rồi deploy |
+
+**Quay lại bản trước** nếu deploy lỗi:
+
+```bash
+npx wrangler rollback
+```
+
+(chạy trong thư mục Worker tương ứng).
+
+---
+
+## 12. Bảng tham chiếu lệnh
+
+Chạy từ thư mục gốc `ecom/` trừ khi có ghi khác.
+
+| Mục đích | Lệnh |
+|---|---|
+| Đăng nhập | `npx wrangler login` |
+| Xem tài khoản đang dùng | `npx wrangler whoami` |
+| Tạo D1 | `cd apps/api && npx wrangler d1 create ecom-db` |
+| Tạo KV giỏ hàng | `cd apps/api && npx wrangler kv namespace create CART` |
+| Tạo KV cache web | `cd apps/api && npx wrangler kv namespace create NEXT_INC_CACHE_KV` |
+| Deploy backend | `cd apps/api && npx wrangler deploy` |
+| Seed D1 remote | `cd apps/api && npx wrangler d1 execute ecom-db --remote --file=./data/seed.sql` |
+| Build frontend | `cd apps/web && NEXT_PUBLIC_API_URL=https://ecom-api.<sub>.workers.dev npx opennextjs-cloudflare build` |
+| Deploy frontend | `cd apps/web && npx wrangler deploy` |
+| Log realtime | `npx wrangler tail` (trong thư mục Worker) |
+| Quay lại bản trước | `npx wrangler rollback` (trong thư mục Worker) |
+
+---
+
+## 13. Xử lý sự cố
+
+### 1. `wrangler login` mở trình duyệt nhưng không xong
+Đăng nhập bằng API token (xem mục 3). Đảm bảo token có quyền Workers, D1 và KV.
+
+### 2. `wrangler d1 create` báo tên đã tồn tại
+Tên D1 chỉ cần duy nhất trong account của bạn. Đổi tên, ví dụ `ecom-db-<tên-bạn>`, và dùng tên mới ở mọi lệnh sau.
+
+### 3. Backend trả 500 khi gọi `/api/products`
+Thường do `database_id` sai, hoặc chưa seed remote. Kiểm tra:
+- `database_id` trong `apps/api/wrangler.toml` có khớp với output của `d1 create` không (dùng `npx wrangler d1 list` để xem).
+- Đã chạy bước 5 chưa. Nếu chưa, bảng `products` không tồn tại.
+- Xem log: `npx wrangler tail` trong `apps/api`.
+
+### 4. `/api/products` trả `{"products":[]}`
+Chưa seed remote, hoặc seed vào database khác. Chạy lại bước 5 với đúng tên database.
+
+### 5. Frontend build xong nhưng menu không tải được
+Build không có `NEXT_PUBLIC_API_URL` đúng. Kiểm tra bằng lệnh `grep` ở bước 8.2, nếu không thấy URL backend của bạn, build lại với biến đặt đúng. Nhớ: đây là biến lúc build, đặt xong phải chạy lại `npx opennextjs-cloudflare build`.
+
+### 6. Frontend báo lỗi CORS khi gọi backend
+Backend đã bật `cors()` cho `/api/*` và `/img/*` nên thường không gặp lỗi này. Nếu gặp, kiểm tra lại `app.use("/api/*", cors())` trong [apps/api/src/index.ts](../apps/api/src/index.ts) và đảm bảo bạn đã deploy bản mới của backend.
+
+### 7. `wrangler deploy` của web báo lỗi `compatibility flag` hoặc thiếu `nodejs_compat`
+Phải có `"compatibility_flags": ["nodejs_compat"]` trong `apps/web/wrangler.jsonc`.
+
+### 8. Ảnh placeholder không hiện
+Kiểm tra `curl "$API/img/placeholder.svg?category=Tr%C3%A0&name=T"` trả `200 image/svg+xml`. Nếu 404, backend bản bạn deploy chưa có route `/img` — deploy lại `apps/api`.
+
+### 9. Trang admin hoặc trang con trả 404 sau khi deploy
+Kiểm tra `not_found_handling` trong `apps/web/wrangler.jsonc` và đã build lại chưa. Các trang `/`, `/cart`, `/admin` phải trả `200`.
+
+### 10. Build web báo lỗi bộ nhớ hoặc treo
+Đóng các tiến trình `next dev` và `wrangler dev` đang chạy (chúng có thể giữ cổng), rồi build lại. Không chạy `migrate`.
+
+---
+
+## 14. Chi phí và giới hạn
+
+### Free plan (đủ cho dự án này)
+
+| Tài nguyên | Giới hạn free | Ghi chú |
 |---|---|---|
-| Login | `npx wrangler login` | 1 lần / máy |
-| Tạo D1 | `cd apps/api && wrangler d1 create ecom-db` | lấy database_id |
-| Tạo KV | `cd apps/api && wrangler kv namespace create CART` | lấy id |
-| Ảnh món | *(không cần — placeholder SVG tự sinh ở `/img/placeholder.svg`)* | R2 optional |
-| Sửa config | edit `apps/api/wrangler.toml` | paste id thật |
-| Deploy API | `npm -w apps/api run deploy` | worker `ecom-api` |
-| Seed remote | `npm -w apps/api run seed -- --remote` *(xem lưu ý dưới)* | hoặc `wrangler d1 execute ... --remote` |
-| Init OpenNext | `cd apps/web && npx @opennextjs/cloudflare@latest init` | biến Next thành worker |
-| Build web | `cd apps/web && npx opennextjs-cloudflare build` | cần `API_URL` prod |
-| Deploy web | `cd apps/web && npx wrangler deploy` | worker `ecom-web` |
+| Workers | 100.000 request/ngày | Đủ cho quán cafe nhỏ |
+| D1 | 5 triệu lượt đọc và 100.000 lượt ghi/ngày, 5 GB | Đủ |
+| KV | 100.000 lượt đọc và 1.000 lượt ghi/ngày | Đủ với giỏ hàng |
 
-> 📝 **Lưu ý toggle --remote:** script `seed` hiện tại không có `--remote`; chạy remote đúng cách:
-> `cd apps/api && npx wrangler d1 execute ecom-db --remote --file=./data/seed.sql`
-> (đã có thể thêm `"seed:prod": "wrangler d1 execute ecom-db --remote --file=./data/seed.sql"`).
-
----
-
-## 12. Chi phí / Free tier
-
-| Tài nguyên | Free plan | Dự án này cần |
-|---|---|---|
-| Workers | 100.000 req/ngày — miễn phí | ✅ vừa đủ |
-| D1 | 5M read + 100K write/ngày, 5GB dung lượng | ✅ |
-| KV | 100K read + 1K write/ngày, 1GB | ✅ |
-| R2 (optional — đang tắt) | 10GB storage + 1M egress/tháng | ⏸️ chưa dùng |
-
-→ **Toàn bộ chi phí = 0đ** nếu dùng free plan với traffic nhỏ như quán cafe.
-
----
-
-## 13. Troubleshooting deploy
-
-### 1. `wrangler deploy` báo "Missing entry-point"
-→ chạy từ thư mục có `wrangler.toml` hoặc chỉ rõ `wrangler deploy src/index.ts`.
-
-### 2. API trả 500 khi gọi bảng
-→ bindings sai. Kiểm tra `npx wrangler deploy --dry-run`, xác nhận `database_id` và `id`
-trong [wrangler.toml](../apps/api/wrangler.toml) khớp object vừa tạo. Chưa seed remote
-cũng gây lỗi bảng thiếu → chạy Bước 5.
-
-### 3. `/api/products` trả `[]` (rỗng) trên production
-→ chưa `--remote --file=./data/seed.sql`.
-
-### 4. Web lỗi runtime / polygon "compatibility flag"
-→ thiếu `compatibility_flags = ["nodejs_compat"]` trong wrangler config của web worker.
-Xem log: `npx wrangler tail` (chạy trong thư mục web).
-
-### 5. Web báo khi gọi `/api/...` sang localhost
-→ `next.config.mjs` đang ở chế độ dev. Build với `API_URL=https://ecom-api.<tên>.workers.dev`
-hoặc cập nhật nhánh production trong config.
-
-### 6. Ứng dụng CORS khi frontend ở domain A gọi api ở domain B
-→ api đã có `cors()`; nếu cần chặn origin lạ, hẹp lại trong `app.use("/api/*", cors({ origin: ["https://ecom-web.<tên>.workers.dev"] }))`.
-
-### 7. Placeholder ảnh không hiện (trả 404 / rỗng)
-→ xác nhận route `/img/placeholder.svg` vẫn được mount trong [index.ts](../apps/api/src/index.ts)
-(`app.route("/img", placeholder)`) và rewrite `/img/*` có trong [next.config.mjs](../apps/web/next.config.mjs).
-Test trực tiếp: `curl https://ecom-api.<tên>.workers.dev/img/placeholder.svg?...` (trả `image/svg+xml`).
-
-### 8. `wrangler login` mở browser nhưng bị treo màn hình trống
-→ đăng nhập thủ công tại https://dash.cloudflare.com → account → API Tokens → tạo token
-editable Workers, rồi chạy `export CLOUDFLARE_API_TOKEN=...` trước khi deploy.
-
----
-
-## 14. Lưu ý bảo mật & giới hạn
-
-### Bảo mật
-- **Admin hiện chưa có auth** — trang `/admin` gọi trực tiếp các endpoint ghi/xoá.
-  Trước khi public nên thêm **ADMIN_TOKEN** (bí mật trên workers) và kiểm tra ở
-  `src/routes/products.ts`, `orders.ts` (vd middleware `Header("x-admin-token") === TOKEN`).
-- Không commit `database_id`/`id` thật nếu repo public.
-- `expirationTtl` giỏ hàng 30 ngày là tốt; cân nhắc ngắn hơn cho production (vd 7 ngày).
+Dự án không dùng R2, nên không tốn phí lưu trữ ảnh.
 
 ### Giới hạn cần biết
-- **Next.js ↔ Workers:** không phải toàn bộ tính năng Next tương thích OpenNext 100%
-  (đã xử lý phổ biến trong adapter hiện tại); tránh dùng Node-only APIs không có
-  `nodejs_compat` bật.
-- **KV eventual consistency:** ghi giỏ hàng có thể mất ~vài chục giây để "thấy" ở mọi
-  vùng trên toàn cầu — không ảnh hưởng use-case quán cafe 1 chi nhánh.
-- **Ảnh hiện tại:** dùng **SVG placeholder** sinh nhanh tại worker (`/img/placeholder.svg`) —
-  miễn phí, không tốn egress, tự đổi màu theo danh mục. Khi chuyển sang R2 (ảnh thật),
-  tạo lại route upload và được phục vụ qua `/img/:key`; với nhiều ảnh nên cân nhắc
-  CDN cache hoặc public bucket (`wrangler r2 bucket website`).
+- **Không có đăng nhập admin.** Trước khi đưa ra ngoài thật, cần thêm xác thực cho các route ghi (`POST/PATCH/DELETE`).
+- **KV có tính nhất quán cuối cùng (eventual consistency):** giỏ hàng vừa ghi có thể mất vài giây để hiện ở vùng khác. Không ảnh hưởng một chi nhánh.
+- **Ảnh là placeholder SVG**, không phải ảnh thật. Muốn ảnh thật cần thêm R2 và route upload.
+- **Không commit id thật lên repo public.** Các id trong `wrangler.toml` và `wrangler.jsonc` là id của tài khoản bạn; cân nhắc tách ra file riêng hoặc dùng biến môi trường trước khi chia sẻ code.
 
 ---
 
-*Tài liệu khớp với phiên bản hiện tại của dự án: wrangler 4.x, Hono 4, Next.js 15, Tailwind v4.*
+## 15. Bài tập gợi ý
+
+1. Deploy xong, thêm một món mới trên `/admin`, rồi kiểm tra lại trên `/api/products`. Chạy lại seed và giải thích vì sao món đó biến mất.
+2. Đổi `name` trong `wrangler.toml` thành `ecom-api-<tên-bạn>`, deploy lại, và giải thích URL thay đổi thế nào. Phải build lại frontend với URL mới không?
+3. Cố tình bỏ `NEXT_PUBLIC_API_URL` khi build, deploy, rồi dùng DevTools để tìm địa chỉ mà trình duyệt đang gọi. Giải thích vì sao giá trị đó sai.
+4. Dùng `npx wrangler tail` trong khi đặt một đơn hàng, và đọc log để tìm request tương ứng.
+5. Dùng `npx wrangler rollback` để quay lại bản trước, rồi deploy lại bản mới.
