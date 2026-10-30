@@ -15,6 +15,8 @@ database_id = "00000000-0000-0000-0000-000000000001"
 binding = "CART"
 id = "00000000000000000000000000000000000000000001"
 
-[[r2_buckets]]
-binding = "IMAGES"
-bucket_name = "ecom-images"
+# Tạm thời không dùng R2 để lưu ảnh — ảnh sẽ dùng placeholder SVG.
+# Kích hoạt lại R2 bằng cách bỏ comment khối bên dưới khi cần upload ảnh thật.
+# [[r2_buckets]]
+# binding = "IMAGES"
+# bucket_name = "ecom-images"

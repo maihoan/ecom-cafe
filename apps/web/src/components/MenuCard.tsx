@@ -4,9 +4,16 @@ import type { Product } from "@/lib/api";
 export default function MenuCard({ product, onAdd }: { product: Product; onAdd: (p: Product) => void }) {
   return (
     <div className="rounded-2xl border border-stone-200 bg-white shadow-sm hover:shadow-md transition overflow-hidden">
-      <div className="h-36 bg-gradient-to-br from-amber-100 to-orange-50 flex items-center justify-center text-5xl">
-        ☕
-      </div>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={
+          product.image_url ||
+          `/img/placeholder.svg?category=${encodeURIComponent(product.category)}&name=${encodeURIComponent(product.name)}`
+        }
+        alt={product.name}
+        loading="lazy"
+        className="h-36 w-full object-cover"
+      />
       <div className="p-4 flex flex-col gap-2">
         <div className="flex items-start justify-between gap-2">
           <div>

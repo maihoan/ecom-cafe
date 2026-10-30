@@ -5,8 +5,6 @@ export interface Env {
   DB: D1Database;
   /** KV — giỏ hàng của khách hàng (key: cart:<customerId>) */
   CART: KVNamespace;
-  /** R2 — hình ảnh món ăn */
-  IMAGES: R2Bucket;
 }
 
 export interface Product {

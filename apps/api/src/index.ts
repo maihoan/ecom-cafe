@@ -5,7 +5,7 @@ import type { Env } from "./types";
 import { products } from "./routes/products";
 import { cart } from "./routes/cart";
 import { orders } from "./routes/orders";
-import { upload } from "./routes/upload";
+import { placeholder } from "./routes/placeholder";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -21,7 +21,7 @@ app.get("/", (c) =>
       productById: "/api/products/:id (GET, PATCH, DELETE)",
       cart: "/api/cart/:customerId (GET, PUT, DELETE)",
       orders: "/api/orders (GET, POST) / /api/orders/:id (PATCH)",
-      upload: "/api/upload (POST multipart), /img/:key (GET)",
+      placeholder: "/img/placeholder.svg?category=...&name=... (SVG)",
     },
   })
 );
@@ -29,7 +29,6 @@ app.get("/", (c) =>
 app.route("/api/products", products);
 app.route("/api/cart", cart);
 app.route("/api/orders", orders);
-app.route("/api/upload", upload);
-app.route("/img", upload);
+app.route("/img", placeholder);
 
 export default app;
